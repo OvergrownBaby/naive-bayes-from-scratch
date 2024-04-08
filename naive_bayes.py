@@ -1,83 +1,94 @@
 import pandas as pd
 import numpy as np
-
-# todo: vectorize likelihood calculations
+from abc import ABC
 
 class MultinomialNB():
-    def __init__(self):
-        self.model = {}
+    def __init__(self, log=False, alpha=1):
+        self.log = log
+        self.alpha = alpha
+
+        self.model = {} # {label: (class_prob, feature_counts, feature_probs)}
 
     def fit(self, X: pd.DataFrame, y: pd.Series):
         labels = y.unique()
-        features = X.columns
+        class_probs = y.value_counts(normalize=True)
 
+        num_of_keywords = len(X.columns)
+        alpha = self.alpha
         
         for label in labels:
             subset = X[y == label]
-            likelihoods = {}
-            class_prob = len(subset) / len(X)
-            for feature in features:
-                likelihoods[feature] = subset[feature].mean()
-            self.model[label] = (class_prob, likelihoods)
+            total_count = sum(subset.sum())
+            feature_probs = (subset.sum() + alpha) / (total_count + alpha*num_of_keywords)
+            self.model[label] = (class_probs[label], feature_probs.to_dict())
 
+    def get_posterior(self, label, feature_vec: pd.DataFrame):
+        """
+        argmax p(C|X) = p(C)p(X|C)\n
+        where p(X|C) = m_coeff * p(x_1|C)^x_1 * ... * p(x_n|C)^x_n\n
+        but after log transform and optimization, \n
+        p(X|C) = p(x_1|C)^x_1 + ... + p(x_n|C)^x_n
+        where p(x_i|C) = (count of word i in class + a)/(total words in class)
+        """
+        class_prob = self.model[label][0]
+        feature_probs = self.model[label][1]
         
+        # log(p(class)) + log(p(x_1|class)) + ... + log(p(x_n|class))
+        return np.log(class_prob) + np.sum([
+            np.log(feature_probs[feature]) if feature_vec[feature] == 1 
+            else np.log1p(-feature_probs[feature]) 
+            for feature in feature_vec.index
+        ])
 
-    def predict():
-        pass
+    def predict(self, X: pd.DataFrame):
+        y_pred = []
+        for _, row in X.iterrows():
+            y_pred.append(max(self.model.keys(), key=lambda label: self.get_posterior(label, row)))
+        return y_pred
+    
 
-
+# todo: add alpha parameter for laplace smoothing
 class BernoulliNB():
-    def __init__(self, log_likelihood=False):
-        self.log_likelihood = log_likelihood
-        print("Model: Bernoulli Naive Bayes")
-        print("Log Likelihood: ", self.log_likelihood)
+    def __init__(self, log=False, laplace_smoothing=False):
+        self.log = log
+        self.laplace_smoothing = laplace_smoothing
 
-        self.model = {}
+        self.model = {} # {label: (class_prob, feature_probs)}
         
-
     def fit(self, X: pd.DataFrame, y: pd.Series):
         labels = y.unique()
-        features = X.columns
+        class_probs = y.value_counts(normalize=True)
 
-        ### uses log likelihood to avoid underflow + laplace smoothing
-        if self.log_likelihood:
-            class_probs = np.log(y.value_counts(normalize=True))
+        for label in labels:
+            subset = X[y == label]
+            if self.laplace_smoothing:
+                feature_probs = subset.sum().add(1) / (len(subset) + 2)
+            else:
+                feature_probs = subset.mean()
+            self.model[label] = (class_probs[label], feature_probs.to_dict())
 
-            for label in labels:
-                subset = X[y == label]
-                log_likelihoods = {}
-                # Use Laplace smoothing to avoid log(0)
-                for feature in features:
-                    feature_count = subset[feature].sum()
-                    log_likelihoods[feature] = np.log((feature_count + 1) / (len(subset) + 2))
-                self.model[label] = (class_probs[label], log_likelihoods)
+        # print(self.model)
 
-        ### base implementation
+    def get_posterior(self, label, feature_vec: pd.DataFrame):
+
+        if self.log:
+            # log(p(class)) + log(p(x_1|class)) + ... + log(p(x_n|class))
+            return np.log(self.model[label][0]) + np.sum([
+                np.log(self.model[label][1][feature]) if feature_vec[feature] == 1 
+                else np.log1p(-self.model[label][1][feature]) 
+                for feature in feature_vec.index
+            ])
         else:
-            class_probs = y.value_counts(normalize=True)
-
-            for label in labels:
-                subset = X[y == label]
-                likelihoods = {}
-                for feature in features:
-                    likelihoods[feature] = (subset[feature] == 1).mean()
-                self.model[label] = (class_probs[label], likelihoods)
+            # p(class) * p(x_1|class) * ... * p(x_n|class)
+            return self.model[label][0] * np.prod([
+                self.model[label][1][feature] if feature_vec[feature] == 1 
+                else 1 - self.model[label][1][feature] 
+                for feature in feature_vec.index
+            ])
 
 
     def predict(self, X: pd.DataFrame):
-        def get_posterior(label, feature_vec):
-            if self.log_likelihood:
-                return self.model[label][0] + np.sum(
-                    [self.model[label][1][feature] if feature_vec[feature] == 1 
-                    else np.log1p(-np.exp(self.model[label][1][feature])) 
-                    for feature in feature_vec.index])
-            else:
-                return self.model[label][0] * np.prod(
-                    [self.model[label][1][feature] if feature_vec[feature] == 1 
-                    else 1 - self.model[label][1][feature] 
-                    for feature in feature_vec.index])
-        
         y_pred = []
         for _, row in X.iterrows():
-            y_pred.append(max(self.model.keys(), key=lambda label: get_posterior(label, row)))
+            y_pred.append(max(self.model.keys(), key=lambda label: self.get_posterior(label, row)))
         return y_pred
