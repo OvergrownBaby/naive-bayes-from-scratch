@@ -1,7 +1,5 @@
 # naive-bayes-from-scratch
 
-曾钰麟 2020011713 13530583669
-
 环境要求:
 Python 3
 pandas
